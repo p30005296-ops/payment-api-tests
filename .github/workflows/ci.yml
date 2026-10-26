@@ -1,0 +1,66 @@
+name: API tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1-5" # weekday mornings, catches API regressions
+
+env:
+  GOTESTSUM: gotest.tools/gotestsum@v1.13.0
+  # Test credentials are stored as repository secrets, never committed.
+  API_EMAIL: ${{ secrets.API_EMAIL }}
+  API_CLIENT_SECRET: ${{ secrets.API_CLIENT_SECRET }}
+
+jobs:
+  tests:
+    name: Regression suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Static checks
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet -tags "knownissues slow" ./...
+
+      - name: Install Playwright driver and Chromium
+        run: go run github.com/mxschmitt/playwright-go/cmd/playwright install --with-deps chromium
+
+      - name: Run tests
+        run: |
+          mkdir -p reports
+          go run $GOTESTSUM --format testname --junitfile reports/junit.xml -- -count=1 ./...
+
+      - name: Publish report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-report
+          path: reports/
+
+  known-issues:
+    name: Known defects (expected to fail)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go run github.com/mxschmitt/playwright-go/cmd/playwright install --with-deps chromium
+      - name: Run known-issue tests
+        run: |
+          mkdir -p reports
+          go run $GOTESTSUM --format testname --junitfile reports/known-issues.xml -- -count=1 -tags knownissues -run KnownIssue ./tests/
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: known-issues-report
+          path: reports/
